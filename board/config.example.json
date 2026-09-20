@@ -1,0 +1,29 @@
+{
+  "cli_path": "",
+  "node_path": "",
+  "permission_mode": "bypassPermissions",
+  "model": "",
+  "available_models": [
+    "hy4-preview",
+    "hy3",
+    "hy3-x",
+    "deepseek-v4.1-flash",
+    "glm-5.3-flash",
+    "minimax-m3",
+    "glm-5.3",
+    "kimi-k3-1",
+    "deepseek-v4-pro",
+    "auto"
+  ],
+  "max_turns": 80,
+  "timeout_sec": 1800,
+  "fallback_model": "",
+  "auto_scan": true,
+  "scan_interval_sec": 60,
+  "max_concurrent": 3,
+  "live_partial": true,
+  "live_show_thinking": true,
+  "project_root": "",
+  "tasks_dir": "",
+  "assets_dir": ""
+}
