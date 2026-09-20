@@ -34,7 +34,8 @@ serve.py（常驻）
 绝对路径的反斜杠在 Markdown 里是转义符，编辑器会把它吃掉导致图显示不出来；
 相对路径则换机器、换盘符、卡片在状态目录间移动都不失效。
 
-接新项目时照抄 `example/tasks/`（内含各状态的示例卡片，见 `example/README.md`）。
+接新项目走页面上的「＋ 新建项目…」：选目录 → 六个状态目录和 `assets/` 自动建好，不用手抄。
+`example/tasks/` 只是格式样板（示例卡片，见 `example/README.md`），不参与运行。
 
 启动即同时启动调度器，不需要 Windows 计划任务，也不依赖 WorkBuddy 的自动化。
 

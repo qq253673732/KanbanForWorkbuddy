@@ -11,7 +11,7 @@
   <看板项目>/
     serve.py          启动入口（HTTP 服务 + 内嵌调度器都在这一个文件里）
     automation/       执行 prompt
-    example/tasks/    示例卡片目录（接新项目时照抄一份）
+    example/tasks/    卡片格式样板（不参与运行，见 example/README.md）
     projects/         「统一放看板下」的各项目 task 目录（用到才有）
     config.json       本机主配置（不入库，见 config.example.json）
     projects.json     本机项目清单（不入库，见 projects.example.json）
