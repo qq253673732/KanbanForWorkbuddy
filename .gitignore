@@ -23,3 +23,6 @@ example/assets/
 .DS_Store
 Thumbs.db
 *.swp
+
+# 工具自己的元数据 / 会话记忆
+.workbuddy/
