@@ -1,4 +1,13 @@
-# 调度与执行说明
+# KanbanForWorkbuddy · 看板任务池
+
+单进程完成三件事：看板 UI、内嵌调度器（拉起 WorkBuddy CLI 无头执行卡片）、文件移动实现的状态流转。
+
+启动：`python serve.py`（默认 8770；`python serve.py 9000` 换端口）。
+
+> **本机文件不入库**：`board/config.json`、`board/projects.json`（含绝对路径与 CLI 安装位置）
+> 已加入 `.gitignore`，首次启动会从同名 `.example.json` 模板自动生成。详见下方「配置项」章节。
+
+---
 
 ## 架构：单进程，两条触发路径，一份 prompt
 
