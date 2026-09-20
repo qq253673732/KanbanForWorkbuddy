@@ -1,22 +1,22 @@
 # 执行转录与原始事件流：一次对话能到几十 MB，绝不入库
-board/.runs/
+runtime/.runs/
 
 # Python 缓存
 __pycache__/
 *.pyc
 
 # 本地运行态
-board/.run-state.json
+runtime/.run-state.json
 
 # 本机配置：含绝对路径（项目根/卡片目录）与 CLI 安装位置，绝不入库。
-# 入库的是脱敏模板 config.example.json / projects.example.json，
+# 入库的是根目录的脱敏模板 config.example.json / projects.example.json，
 # 首次启动 serve.py 会自动用模板生成本机的 config.json / projects.json。
-board/config.json
-board/projects.json
+/config.json
+/projects.json
 
 # 贴图目录现在跟卡片走（默认 <tasks_dir>/assets，通常在别的仓库里），
 # 这里只防一份万一被指回本地的情况；示例卡片目录是要入库的，不忽略。
-board/assets/
+runtime/assets/
 example/assets/
 
 # 本地编辑器 / 系统垃圾

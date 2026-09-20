@@ -4,7 +4,7 @@
 
 启动：`python serve.py`（默认 8770；`python serve.py 9000` 换端口）。
 
-> **本机文件不入库**：`board/config.json`、`board/projects.json`（含绝对路径与 CLI 安装位置）
+> **本机文件不入库**：根目录的 `config.json`、`projects.json`（含绝对路径与 CLI 安装位置）
 > 已加入 `.gitignore`，首次启动会从同名 `.example.json` 模板自动生成。详见下方「配置项」章节。
 
 ---
@@ -24,8 +24,9 @@ serve.py（常驻）
 | 位置 | 内容 |
 |---|---|
 | 项目根（`serve.py`、`automation/`、`example/`） | 代码、prompt、示例卡片 |
-| `board/`（`config.json`、`.runs/`） | 运行数据 |
-| **`config.json` 的 `tasks_dir`** | **卡片目录，可以指向别处（比如业务项目的 `task/`）** |
+| 项目根（`config.json`、`projects.json`） | **本机配置，不入库**（模板是 `*.example.json`） |
+| `runtime/`（`.runs/`、`.run-state.json`） | 运行数据：执行转录、调度器状态 |
+| **`config.json` 的 `tasks_dir`** | **卡片目录，可以指向别处（比如业务项目的 `task/`），默认 `runtime/tasks`** |
 | **`config.json` 的 `assets_dir`** | **贴图目录，默认 `<tasks_dir>/assets`** |
 
 卡片、贴图都可以和工具分家：卡片想放在哪个项目里就放哪，贴图跟着卡片走。
@@ -234,16 +235,15 @@ Now verifying line counts for each file.
 
 ---
 
-## 配置项（board/config.json）
+## 配置项（根目录 config.json）
 
-> **本机文件，不入库。** 仓库里只有脱敏模板 `board/config.example.json` /
-> `board/projects.example.json`；首次启动 `serve.py` 会自动用模板生成本机的
+> **本机文件，不入库。** 仓库里只有脱敏模板 `config.example.json` / `projects.example.json`；首次启动 `serve.py` 会自动用模板生成本机的
 > `config.json` / `projects.json`，之后怎么改都不会污染远端。
 > 换机器 clone 下来 → 跑一遍 `python serve.py` → 在页面上填项目目录即可。
 
 | 字段 | 说明 |
 |---|---|
-| `tasks_dir` | **卡片目录**，可指向任意位置（默认 `board/tasks`）。改完重启生效 |
+| `tasks_dir` | **卡片目录**，可指向任意位置（默认 `runtime/tasks`）。改完重启生效 |
 | `assets_dir` | **贴图目录**（默认 `<tasks_dir>/assets`，即跟卡片走）。卡片正文用相对路径 `../assets/...` 引用 |
 | `project_root` | Agent 读写的项目根，务必显式配置；没配时取 `tasks_dir` 的上一级 |
 | `cli_path` | WorkBuddy CLI 路径，应用升级后可能需要更新 |
@@ -252,7 +252,7 @@ Now verifying line counts for each file.
 
 ### 多项目（projects.json）
 
-页头「项目」下拉可切换 / 新建项目。项目清单存在 `board/projects.json`（同样不入库）：
+页头「项目」下拉可切换 / 新建项目。项目清单存在根目录的 `projects.json`（同样不入库）：
 
 ```json
 {

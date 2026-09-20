@@ -7,18 +7,18 @@
   2. 内嵌调度器：每 N 秒扫描 1-待开始/，领取一张卡，拉起 WorkBuddy CLI 无头执行
   3. 状态流转：用文件移动实现，同盘内原子
 
-目录结构（脚本在根，运行数据集中在 board/）：
+目录结构（脚本在根，运行数据集中在 runtime/）：
   <看板项目>/
     serve.py          启动入口（HTTP 服务 + 内嵌调度器都在这一个文件里）
     automation/       执行 prompt
     example/tasks/    示例卡片目录（接新项目时照抄一份）
     projects/         「统一放看板下」的各项目 task 目录（用到才有）
-    board/            运行数据区：config.json projects.json .runs/ .run-state.json
-                      （config.json / projects.json 是本机文件，不入库；
-                        首次启动从同目录的 *.example.json 模板自动生成）
+    config.json       本机主配置（不入库，见 config.example.json）
+    projects.json     本机项目清单（不入库，见 projects.example.json）
+    runtime/          运行数据区：.runs/ .run-state.json
 
 **卡片目录与贴图目录都是可配置的**：config.json 的 `tasks_dir` 指定卡片放哪（比如直接
-放到业务项目的 task/ 里），`assets_dir` 指定截图放哪；都没配就回落到 `board/tasks`
+放到业务项目的 task/ 里），`assets_dir` 指定截图放哪；都没配就回落到 `runtime/tasks`
 和 `<tasks_dir>/assets`。工具本体和卡片因此可以分家，贴图跟着卡片走。
 
 卡片正文里的图片一律写成**相对卡片文件**的 `../assets/<卡片ID>/xxx.png`（正斜杠）。
@@ -63,17 +63,17 @@ try:
 except Exception:
     pass
 
-# 脚本放在根目录，运行产生的数据集中在 board/ 一个子目录里。
-# 卡片目录（tasks）另有配置：见 config.json 的 tasks_dir，默认才落在 board/tasks。
+# 配置放根目录（改路径的地方一眼找得到），运行产生的数据集中在 runtime/ 一个子目录里。
+# 卡片目录（tasks）另有配置：见 config.json 的 tasks_dir，默认才落在 runtime/tasks。
 ROOT = Path(__file__).resolve().parent          # 启动入口
-BOARD_DIR = ROOT / "board"                      # 运行数据区
+BOARD_DIR = ROOT / "runtime"                    # 运行数据区
 DEFAULT_TASKS_DIR = BOARD_DIR / "tasks"
 RUNS_DIR = BOARD_DIR / ".runs"
-CONFIG_FILE = BOARD_DIR / "config.json"
-CONFIG_EXAMPLE_FILE = BOARD_DIR / "config.example.json"      # 脱敏模板（入库）
+CONFIG_FILE = ROOT / "config.json"
+CONFIG_EXAMPLE_FILE = ROOT / "config.example.json"            # 脱敏模板（入库）
 STATE_FILE = BOARD_DIR / ".run-state.json"
-PROJECTS_FILE = BOARD_DIR / "projects.json"      # 项目清单 + 当前激活项目
-PROJECTS_EXAMPLE_FILE = BOARD_DIR / "projects.example.json"  # 脱敏模板（入库）
+PROJECTS_FILE = ROOT / "projects.json"          # 项目清单 + 当前激活项目
+PROJECTS_EXAMPLE_FILE = ROOT / "projects.example.json"        # 脱敏模板（入库）
 CENTRAL_PROJECTS_DIR = ROOT / "projects"         # 「统一放看板下」的项目根
 PROMPT_FILE = ROOT / "automation" / "executor.prompt.txt"
 
@@ -325,7 +325,7 @@ def save_config(config: dict) -> None:
 
 
 def tasks_dir_from(config: dict) -> Path:
-    """卡片目录：config.json 的 `tasks_dir` 说了算，没配就回落到 board/tasks。
+    """卡片目录：config.json 的 `tasks_dir` 说了算，没配就回落到 runtime/tasks。
 
     卡片故意可以和工具分家（比如放在真正的业务项目里），所以这里读配置而不是写死路径。
     配了但目录不存在时按原样返回——交给 ensure_dirs() 去建，不在这里偷偷回落，
@@ -419,7 +419,7 @@ def resolve_project_root(config: dict) -> Path:
     """Agent 干活的目标项目根目录（不是看板目录）。
 
     两层区分很关键：
-      - ROOT          看板系统自己（automation/、board/），Agent 不该乱动
+      - ROOT          看板系统自己（automation/、runtime/），Agent 不该乱动
       - project_root  真正的业务项目（如 E:\\Code\\eshop），Agent 在这里读写文件
 
     一定要在 config.json 里用 project_root 显式指定。没配时退而求其次取「卡片目录的
@@ -2095,7 +2095,7 @@ class Handler(BaseHTTPRequestHandler):
         card = parse_card(path)
         card["outcome"] = ""
         card["updated_at"] = now_iso()
-        # 重试视为全新开始：清空旧的「执行结果」（完整历史在 board/.runs/ 日志里）
+        # 重试视为全新开始：清空旧的「执行结果」（完整历史在 runtime/.runs/ 日志里）
         card["_sections"]["执行结果"] = ""
         write_card(path, card, card["_sections"])
         if move_card(path, DIR_PENDING) is None:

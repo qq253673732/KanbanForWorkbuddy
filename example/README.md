@@ -1,7 +1,7 @@
 # 示例卡片目录
 
 接新项目时，把这个 `tasks/` 整个拷到你的项目里（比如 `E:/Code/你的项目/task`），
-然后在看板的 `board/config.json` 里指过去即可：
+然后在根目录的 `config.json` 里指过去即可：
 
 ```json
 {
