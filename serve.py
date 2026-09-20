@@ -1717,9 +1717,18 @@ def _normkey(path) -> str:
 
 
 def pick_folder_dialog() -> str:
-    """弹 Windows 原生文件夹选择框；返回所选路径，取消返回空串。
+    """弹 Windows 原生文件夹选择框；返回所选路径。
 
-    浏览器拿不到本地绝对路径，所以由服务端代弹——看板本来就是本机工具。
+    返回三种值，调用方要分开处理：
+      - 选中的路径（非空字符串）
+      - ""  用户点了取消
+      - None 弹不出来（非交互会话 / 无桌面窗口站 / PowerShell 不可用）
+
+    浏览器拿不到本地绝对路径，所以由服务端代弹。但**弹框不是可靠能力**：
+    服务若跑在没有交互桌面的环境（被隐藏窗口拉起、无头会话），
+    ShowDialog 会直接返回 Cancel——看着像"用户取消"，实际是没弹出来。
+    所以脚本显式打印标记，好把这两种情况分开，别把失败伪装成取消。
+
     PowerShell 必须 -STA：FolderBrowserDialog 在 MTA 线程里弹不出来。
     """
     script = (
@@ -1727,7 +1736,8 @@ def pick_folder_dialog() -> str:
         "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
         "$d.Description = '选择项目根目录';"
         "$d.ShowNewFolderButton = $true;"
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.SelectedPath}"
+        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){'PICKED:' + $d.SelectedPath}"
+        "else{'CANCEL'}"
     )
     try:
         proc = subprocess.run(
@@ -1737,7 +1747,16 @@ def pick_folder_dialog() -> str:
     except Exception as exc:
         print(f"[warn] 文件夹选择器启动失败: {exc}")
         return None
-    return (proc.stdout or "").strip()
+    out = (proc.stdout or "").strip()
+    if out.startswith("PICKED:"):
+        return out[len("PICKED:"):].strip()
+    if out.upper().endswith("CANCEL"):
+        return ""
+    print(
+        f"[warn] 文件夹选择器无响应（rc={proc.returncode}）："
+        f"{(proc.stderr or '').strip()[:200] or '(stderr 为空，可能没有交互桌面)'}"
+    )
+    return None
 
 
 def api_projects_payload() -> dict:
@@ -2398,6 +2417,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   #dlg-img .imgbody img{max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px}
   .flag{font-size:13px;color:var(--warn);margin-top:6px}
   .hint{font-size:13px;color:var(--muted);margin-top:10px;line-height:1.65}
+  .hint.warn{color:var(--danger)}
   .flag.done{color:var(--done)}
   .flag.danger{color:var(--danger)}
   textarea{width:100%;min-height:64px;font:inherit;font-size:14px;padding:8px;
@@ -2524,9 +2544,14 @@ HTML_TEMPLATE = r"""<!doctype html>
 <dialog id="dlg-proj">
   <h2 style="margin:0;font-size:17px">新建项目</h2>
   <label>项目名称</label>
-  <input id="p-name" placeholder="例如：eshop">
+  <input id="p-name" placeholder="例如：eshop" oninput="this.setAttribute('data-touched','1')">
   <label>项目根目录（Agent 的读写范围）</label>
-  <input id="p-root" readonly>
+  <div class="row" style="display:flex;gap:8px;align-items:center">
+    <input id="p-root" placeholder="粘贴一个绝对路径，或点右侧「选择…」" style="flex:1"
+           oninput="syncProjectNameFromRoot()">
+    <button id="btn-pick" onclick="pickFolder()" style="flex:none">选择…</button>
+  </div>
+  <div class="hint" id="p-hint">路径是 Windows 形式，例如 <code>D:\Code\my-project</code>；点「选择…」调系统文件夹选择框（服务无桌面会话时可能弹不出来，此时直接粘贴路径即可）。</div>
   <label>task 目录放在哪</label>
   <label class="radio"><input type="radio" name="p-loc" value="in-project" checked>
     项目目录下（&lt;项目根&gt;/task）</label>
@@ -3054,7 +3079,7 @@ function resetProjectSelect(){
 
 async function onProjectChange(value){
   if(value === '__new__'){
-    await createProjectFlow();
+    openNewProjectDialog();
     resetProjectSelect();
     return;
   }
@@ -3063,23 +3088,57 @@ async function onProjectChange(value){
   if(ok) location.reload();   // 切项目是全局动作：路径、列、转录整页换新
 }
 
-async function createProjectFlow(){
+// 直接开窗，不依赖系统弹框：路径可以手输/粘贴，「选择…」是可选加分项
+function openNewProjectDialog(){
+  document.getElementById('p-name').value = '';
+  document.getElementById('p-root').value = '';
+  const h = document.getElementById('p-hint');
+  if(h) h.classList.remove('warn');
+  document.getElementById('dlg-proj').showModal();
+  document.getElementById('p-root').focus();
+}
+
+// 路径末尾的名字自动带进项目名（用户改过就不动）
+function syncProjectNameFromRoot(){
+  const nameEl = document.getElementById('p-name');
+  if(nameEl.value.trim() && nameEl.getAttribute('data-touched') === '1') return;
+  const p = document.getElementById('p-root').value.trim().replace(/[\\/]+$/, '');
+  nameEl.value = p.split(/[\\/]/).pop() || '';
+}
+
+async function pickFolder(){
+  const btn = document.getElementById('btn-pick');
+  const h = document.getElementById('p-hint');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '等待选择…';
+  if(h){ h.textContent = '已调起系统文件夹选择框，请在弹出的窗口里选目录…'; h.classList.remove('warn'); }
   let data;
   try{
-    // 服务端弹原生文件夹选择框，浏览器拿不到本地绝对路径；选目录期间请求会挂起，属正常
+    // 服务端弹原生文件夹选择框；选目录期间请求会挂起，属正常
     const res = await fetch('/api/projects/pick-folder', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
     });
     data = await res.json().catch(function(){ return {}; });
-  }catch(err){ alert('无法打开文件夹选择器：' + err.message); return; }
-  if(data.error){ alert(data.error); return; }
-  if(data.canceled || !data.path) return;   // 用户取消，静默收回
+  }catch(err){
+    if(h){ h.textContent = '无法调起文件夹选择框（' + err.message + '）：直接把路径粘贴到上面的输入框即可。'; h.classList.add('warn'); }
+    return;
+  }finally{
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+  if(data.error || data.canceled){
+    if(h){
+      h.textContent = (data.error ? data.error + '；' : '')
+        + '直接把项目根目录的绝对路径粘贴到上面的输入框即可，效果一样。';
+      h.classList.add('warn');
+    }
+    return;
+  }
+  if(!data.path) return;
   document.getElementById('p-root').value = data.path;
-  document.getElementById('p-name').value =
-    data.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
-  const inproj = document.querySelector('input[name="p-loc"][value="in-project"]');
-  if(inproj) inproj.checked = true;
-  document.getElementById('dlg-proj').showModal();
+  syncProjectNameFromRoot();
+  if(h){ h.textContent = '已选：' + data.path; h.classList.remove('warn'); }
 }
 
 function cancelCreateProject(){
@@ -3092,6 +3151,7 @@ async function confirmCreateProject(){
   const root = document.getElementById('p-root').value.trim();
   const locEl = document.querySelector('input[name="p-loc"]:checked');
   if(!name){ alert('请填写项目名称'); return; }
+  if(!root){ alert('请填写或选择项目根目录（绝对路径）'); return; }
   const btn = document.getElementById('btn-proj-create');
   btn.disabled = true;
   try{
