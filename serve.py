@@ -142,6 +142,9 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 DEFAULT_CONFIG = {
     "cli_path": "",
     "node_path": "",
+    # 可选：WorkBuddy 账号 API Key（account-scoped-external-link 直连鉴权）。
+    # 设置后 CLI 子进程直接以该 Key 调模型 API，不依赖桌面登录态/本地网关，最稳。
+    "cli_api_key": "",
     "permission_mode": "bypassPermissions",
     "model": "",
     "available_models": [],
@@ -1173,6 +1176,115 @@ def decode_line(raw: bytes) -> str:
         return raw.decode("gbk", errors="replace")
 
 
+def build_cli_env(config: dict | None = None) -> dict:
+    """构造传给 CLI 子进程的「最小干净」环境变量。
+
+    关键修复（对应 T-079 / T-080 一类 卡死 / 静默退出 / Authentication required 问题）：
+
+    现象根因：headless CLI（--print）在继承 IDE/沙箱运行时的完整环境变量时会异常——
+    1) NODE_OPTIONS 里的语言 shim（node-language-shim.cjs）会让 CLI 直接静默退出；
+    2) CODEBUDDY_MCP_CONFIG 指向本机 MCP 代理（127.0.0.1:57778），CLI 启动时连接它会卡死；
+    3) PATH 里的 safe-bin / vendor/shim 拦截目录会干扰子进程；
+    4) *_FORCE_*_BUNDLE 会把 --print 路由到错误的 bundle 并长时间卡死；
+    5) 指向 127.0.0.1/localhost 的全局代理会让出站 API 调用卡死。
+
+    注意：该 headless CLI 的鉴权类型是 account-scoped-external-link（见 CLI 源码
+    getAuthenticationType()）。它读取 WorkBuddy 桌面端存的**账号登录 OAuth Bearer token**
+    （位于 AppData/Local/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info，
+    敏感字段经 keyblob 加密，keyblob 在 ~/.workbuddy/keyblob），并借桌面端本地鉴权网关
+    向 copilot.tencent.com 换取会话。该 token 带有效期，桌面端登录时会刷新
+    （lastRefreshTime 见该文件 auth 段；过期表现即 "Authentication required"）。
+    因此所谓 "Authentication required" 多半是桌面账号登录态过期/桌面未登录——
+    最稳的修法是确保 WorkBuddy 桌面端处于【打开且已登录】状态（token 会自动刷新，
+    本地网关随之存活），CLI 即可正常鉴权。也可在 config.json 填 cli_api_key 走静态
+    Key 直连（若该账号支持生成 API Key）。
+
+    因此这里只构造 CLI 真正需要的最小环境，而不是继承整个父进程环境：
+    - 系统基础（PATH 去掉 shim 拦截目录、HOME、TEMP 等）
+    - 自动定位 keyblob 所在目录（CODEBUDDY_CONFIG_DIR）
+    - 账号凭证：config.cli_api_key（写到 CODEBUDDY_API_KEY）；若父进程已有
+      CODEBUDDY_API_KEY / CODEBUDDY_AUTH_TOKEN 也一并透传
+    - 桌面网关相关变量（CODEBUDDY_GATEWAY_* 等）原样透传，兼容 desktop 终端启动场景
+    其余 IDE/沙箱变量一律不传递。
+    """
+    parent = os.environ
+    env: dict = {}
+    config = config or {}
+
+    # 1) 系统基础：PATH 剔除 shim / safe-bin 拦截目录，保留 node、git、系统工具
+    raw_path = parent.get("PATH", "")
+    clean_path = []
+    for _p in raw_path.split(os.pathsep):
+        _pl = _p.lower().replace("\\", "/")
+        if any(_s in _pl for _s in ("safe-bin", "vendor/shim",
+                                    "cli-connector-packages", "node-language-shim")):
+            continue
+        if _p and _p not in clean_path:
+            clean_path.append(_p)
+    env["PATH"] = os.pathsep.join(clean_path)
+
+    env["HOME"] = os.path.expanduser("~")
+    env["USERPROFILE"] = os.path.expanduser("~")
+    for _k in ("TEMP", "TMP", "TMPDIR", "SystemRoot", "SystemDrive", "ComSpec",
+               "PATHEXT", "NUMBER_OF_PROCESSORS", "OS", "LANG", "LC_ALL", "LC_CTYPE"):
+        if parent.get(_k):
+            env[_k] = parent[_k]
+
+    # 2) keyblob / config dir：自动探测，覆盖父进程可能错误的默认 ~/.codebuddy
+    _candidates = []
+    _existing = str(parent.get("CODEBUDDY_CONFIG_DIR") or "").strip()
+    if _existing:
+        _candidates.append(_existing)
+    _candidates.append(os.path.expanduser("~/.workbuddy"))
+    _candidates.append(os.path.expanduser("~/.codebuddy"))
+    _detected = None
+    for _c in _candidates:
+        if _c and os.path.isfile(os.path.join(_c, "keyblob")):
+            _detected = _c
+            break
+    if _detected:
+        env["CODEBUDDY_CONFIG_DIR"] = _detected
+    elif _existing:
+        env["CODEBUDDY_CONFIG_DIR"] = _existing
+
+    # 3) 账号凭证（account-scoped-external-link 直连鉴权，最稳，不依赖桌面登录态）
+    #    a) config.json 里的 cli_api_key 优先级最高
+    _api_key = str(config.get("cli_api_key") or "").strip()
+    if _api_key:
+        env["CODEBUDDY_API_KEY"] = _api_key
+    #    b) 父进程已设置的 CODEBUDDY_API_KEY / CODEBUDDY_AUTH_TOKEN 一并透传
+    for _k in ("CODEBUDDY_API_KEY", "CODEBUDDY_AUTH_TOKEN"):
+        if not env.get(_k) and parent.get(_k):
+            env[_k] = parent[_k]
+
+    # 4) 桌面网关鉴权变量：从父进程原样透传。看板若在 WorkBuddy 桌面端内置终端启动，
+    #    父进程即带有【用户级】CODEBUDDY_GATEWAY_PASSWORD / CODEBUDDY_SERVICE_PROXY_URL，
+    #    CLI 的 cli-external-link 借此借桌面本地网关换取用户级会话，模型 API 才会通过。
+    #    （plain PowerShell / agent 沙箱只有 agent 作用域网关凭证，模型 API 会拒绝——
+    #      那种环境本就不是看板该运行的地方。）
+    for _k in ("CODEBUDDY_GATEWAY_AUTH", "CODEBUDDY_GATEWAY_PASSWORD",
+               "CODEBUDDY_SERVICE_PROXY_URL", "CODEBUDDY_HOST",
+               "CODEBUDDY_INTERNET_ENVIRONMENT", "NODE_EXTRA_CA_CERTS",
+               "ACC_PRODUCT_CONFIG_PATH"):
+        if parent.get(_k):
+            env[_k] = parent[_k]
+
+    # 4) 明确剔除会导致 --print 卡死/静默退出的运行时代码（兜底）
+    for _bad in ("NODE_OPTIONS", "BASH_ENV", "PYTHONPATH",
+                 "CODEBUDDY_FORCE_HEADLESS_BUNDLE", "CODEBUDDY_FORCE_LITE_WB_BUNDLE",
+                 "CODEBUDDY_MCP_CONFIG"):
+        env.pop(_bad, None)
+
+    # 5) 剔除指向本机的代理（IDE/沙箱开发拦截代理会让出站调用卡死）
+    for _pk in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "all_proxy", "ALL_PROXY", "ftp_proxy", "FTP_PROXY"):
+        _pv = env.get(_pk, "")
+        if _pv and any(_h in _pv.lower() for _h in ("127.0.0.1", "localhost", "[::1]", "::1")):
+            env.pop(_pk, None)
+
+    return env
+
+
 def run_process(
     command: list, cwd: Path, log_path: Path, timeout: int, model: str, config: dict
 ) -> int:
@@ -1210,6 +1322,7 @@ def run_process(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
+            env=build_cli_env(config),
         )
     except Exception as exc:
         append_log(log_path, f"\n[调度器] 进程启动失败: {exc}\n")
@@ -1249,6 +1362,36 @@ def run_process(
             pass
 
     reader.join(timeout=10)
+
+    # 鉴权失败诊断：headless CLI 报 Authentication required 说明没有登录态
+    try:
+        with open(raw_path, "r", encoding="utf-8", errors="replace") as _fh:
+            _raw = _fh.read()
+    except Exception:
+        _raw = ""
+    if "Authentication required" in _raw:
+        _banner = (
+            "\n" + "=" * 64 + "\n"
+            "[调度器] ⚠️ CLI 未通过登录校验（Authentication required）。\n"
+            "原因：headless CLI 用 account-scoped-external-link 鉴权，依赖 WorkBuddy 桌面端\n"
+            "      存的账号登录 OAuth token（workbuddy-desktop.info）。报这个错通常是该 token\n"
+            "      已过期，或桌面端当前未登录 / 本地鉴权网关未存活。\n"
+            "解决：1) 打开 WorkBuddy 桌面端并确认已登录账号（token 会自动刷新，有效期约 30 天）；\n"
+            "      2) 保持桌面端运行（其本地鉴权网关需存活），再从任意普通终端启动本看板：\n"
+            "         cd E:/Code/KanbanForWorkbuddy && python serve.py\n"
+            "      （不要从 WorkBuddy 自身的 agent 终端启动——那会注入 agent 作用域网关凭证，\n"
+            "       模型 API 会拒绝。CLI 没有 `login` 子命令。）\n"
+            "备选：在 config.json 填 cli_api_key 走静态 Key 直连，绕开登录态。\n"
+            + "=" * 64 + "\n"
+        )
+        append_log(log_path, _banner)
+        try:
+            if isinstance(_state, dict):
+                _state["cli_auth_error"] = True
+                save_state()
+        except Exception:
+            pass
+
     translator.close()
     log_handle.close()
     raw_handle.close()
