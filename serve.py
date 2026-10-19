@@ -1269,9 +1269,15 @@ def build_cli_env(config: dict | None = None) -> dict:
         if parent.get(_k):
             env[_k] = parent[_k]
 
-    # 4) 明确剔除会导致 --print 卡死/静默退出的运行时代码（兜底）
+    # 4) 强制路由到 lite-wb bundle：当前 CLI 安装（WorkBuddy 内置）的 dist/ 只带
+    #    codebuddy-lite-wb.mjs 一个产物，没有 codebuddy-headless / codebuddy。
+    #    --print 默认走 headless 路径，产物缺失会 MODULE_NOT_FOUND 退出（退出码 1，
+    #    stderr: Cannot find module '../dist/codebuddy'）。显式设 lite-wb 才能起来。
+    #    （历史记录里此变量与卡死相关，那是在继承完整 IDE 环境的时代；现在最小干净
+    #    环境 + API Key 直连下实测 11s 正常返回。）
+    env["CODEBUDDY_FORCE_LITE_WB_BUNDLE"] = "1"
     for _bad in ("NODE_OPTIONS", "BASH_ENV", "PYTHONPATH",
-                 "CODEBUDDY_FORCE_HEADLESS_BUNDLE", "CODEBUDDY_FORCE_LITE_WB_BUNDLE",
+                 "CODEBUDDY_FORCE_HEADLESS_BUNDLE",
                  "CODEBUDDY_MCP_CONFIG"):
         env.pop(_bad, None)
 
